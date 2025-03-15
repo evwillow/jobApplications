@@ -1,16 +1,14 @@
 import pandas as pd
 from jobspy import scrape_jobs
 from datetime import datetime
-from pathlib import Path
 import time
+import os
 
 def load_companies():
     """Load companies from CSV file."""
     try:
         df = pd.read_csv('financial_tech_companies_us.csv')
-        # Clean company names and remove duplicates
         companies = df['name'].dropna().unique()
-        # Remove any special characters that might affect search
         companies = [str(company).strip().replace('"', '') for company in companies]
         print(f"Loaded {len(companies)} companies from CSV")
         return companies
@@ -61,162 +59,156 @@ def write_job_to_file(job, f):
 def search_company_jobs(company):
     """Search for jobs at a specific company."""
     try:
-        # More flexible search term
-        search_term = f'"{company}" intern'  # Simplified to get more results initially
-        print(f"Searching with term: {search_term}")
+        # Create search terms
+        search_term = f'"{company}" intern'
+        google_search_term = f'{company} internship jobs remote OR hybrid since:2days'
+        print(f"Searching: {company}")
         
         jobs = scrape_jobs(
-            site_name=["indeed", "linkedin"],
+            site_name=["indeed", "linkedin", "zip_recruiter", "glassdoor", "google", "bayt"],
             search_term=search_term,
-            location="United States",  # Changed from "Remote" to get more results
-            results_wanted=50,  # Increased results
+            google_search_term=google_search_term,
+            location="United States",
+            results_wanted=30,  # Reduced for faster results
             job_type="internship",
-            hours_old=720,  # Increased to 30 days for more results
+            hours_old=168,  # 7 days
             country_indeed='USA',
-            verbose=1  # Increased verbosity for debugging
+            distance=50,  # Search within 50 miles
+            is_remote=True,
+            description_format="markdown",
+            verbose=0  # Reduced logging
         )
         
         if not jobs.empty:
-            print(f"\nFound {len(jobs)} initial jobs for {company}")
-            print("\nSample of jobs found:")
-            sample = jobs.head(3)
-            for _, job in sample.iterrows():
-                print(f"\nTitle: {job.get('title')}")
-                print(f"Location: {job.get('location')}")
-                print(f"Salary: {job.get('min_amount')} - {job.get('max_amount')} {job.get('interval')}")
-                print(f"Remote: {job.get('is_remote')}")
-        else:
-            print(f"No jobs found for {company}")
+            # Add source tracking if not present
+            if 'site' not in jobs.columns:
+                jobs['site'] = 'Unknown'
+            
+            # Log results by source
+            sources = jobs['site'].value_counts()
+            print(f"Found {len(jobs)} jobs total:")
+            for source, count in sources.items():
+                print(f"- {source}: {count}")
         
         return jobs
     except Exception as e:
-        print(f"Error searching jobs for {company}: {e}")
+        print(f"Error: {company} - {str(e)}")
         return pd.DataFrame()
 
 def filter_jobs(jobs_df):
     """Filter jobs for high-paying remote positions."""
     if jobs_df.empty:
         return jobs_df
-        
-    print(f"\nDebug - Initial jobs count: {len(jobs_df)}")
-    print("\nAvailable columns:", jobs_df.columns.tolist())
     
-    # First check for remote/hybrid positions
-    remote_keywords = [
-        'remote', 'hybrid', 'virtual', 'work from home', 'wfh', 
-        'telecommut', 'flexible location', 'work-from-home',
-        'remote optional', 'hybrid optional', 'remote eligible',
-        'remote first', 'remote-first', 'remote/hybrid', 'anywhere'
-    ]
+    # First filter for intern in title
+    intern_keywords = r'intern\b|internship|interns\b'  # Only match whole words
+    title_mask = jobs_df['title'].str.contains(intern_keywords, case=False, na=False)
+    intern_jobs = jobs_df[title_mask].copy()
     
-    # More lenient remote check
-    is_remote_mask = (
-        (jobs_df['is_remote'] == True) |
-        (jobs_df['location'].str.contains('|'.join(remote_keywords), case=False, na=False)) |
-        (jobs_df['title'].str.contains('|'.join(remote_keywords), case=False, na=False)) |
-        (jobs_df['description'].str.contains('|'.join(remote_keywords), case=False, na=False))
+    # Then check for remote/hybrid positions
+    hybrid_keywords = ['hybrid']
+    remote_keywords = ['remote', 'virtual', 'work from home', 'wfh', 'work-from-home']
+    
+    # Separate masks for remote and hybrid
+    is_remote = (
+        (intern_jobs['is_remote'] == True) |
+        (intern_jobs['location'].str.contains('|'.join(remote_keywords), case=False, na=False)) |
+        (intern_jobs['title'].str.contains('|'.join(remote_keywords), case=False, na=False))
     )
     
-    remote_jobs = jobs_df[is_remote_mask].copy()
-    print(f"\nJobs with remote/hybrid options: {len(remote_jobs)}")
+    is_hybrid = (
+        (intern_jobs['location'].str.contains('|'.join(hybrid_keywords), case=False, na=False)) |
+        (intern_jobs['title'].str.contains('|'.join(hybrid_keywords), case=False, na=False)) |
+        (intern_jobs['description'].str.contains('|'.join(hybrid_keywords), case=False, na=False))
+    )
     
-    if not remote_jobs.empty:
-        print("\nSample remote jobs before salary filter:")
-        sample = remote_jobs.head(2)
-        for _, job in sample.iterrows():
-            print(f"\nTitle: {job.get('title')}")
-            print(f"Company: {job.get('company')}")
-            print(f"Location: {job.get('location')}")
-            print(f"Salary: {job.get('min_amount')} - {job.get('max_amount')} {job.get('interval')}")
+    # Combine remote and hybrid masks
+    location_mask = is_remote | is_hybrid
+    remote_jobs = intern_jobs[location_mask].copy()
     
-    # More lenient salary filter
+    # Filter for salary
     salary_mask = (
-        ((remote_jobs['interval'] == 'hourly') & (remote_jobs['min_amount'] >= 25)) |  # Lowered threshold
-        ((remote_jobs['interval'] == 'yearly') & (remote_jobs['min_amount'] >= 52000)) |  # Lowered threshold
+        ((remote_jobs['interval'] == 'hourly') & (remote_jobs['min_amount'] >= 25)) |
+        ((remote_jobs['interval'] == 'yearly') & (remote_jobs['min_amount'] >= 52000)) |
         ((remote_jobs['interval'] == 'monthly') & (remote_jobs['min_amount'] >= 4300)) |
-        ((remote_jobs['max_amount'].notna()) & (remote_jobs['max_amount'] >= 52000)) |  # Check max amount
-        # If salary info is missing but it's from a major tech company, include it
+        ((remote_jobs['max_amount'].notna()) & (remote_jobs['max_amount'] >= 52000)) |
         (remote_jobs['company'].str.contains('Google|Microsoft|Amazon|Apple|Meta|IBM|Intel', case=False, na=False))
     )
     
     filtered_jobs = remote_jobs[salary_mask].copy()
-    print(f"\nFinal high-paying remote jobs: {len(filtered_jobs)}")
     
     if not filtered_jobs.empty:
-        print("\nMatching jobs found:")
-        for _, job in filtered_jobs.iterrows():
-            print(f"\nTitle: {job.get('title')}")
-            print(f"Company: {job.get('company')}")
-            print(f"Location: {job.get('location')}")
-            print(f"Salary: {job.get('min_amount')} - {job.get('max_amount')} {job.get('interval')}")
+        # Log results by source
+        sources = filtered_jobs['site'].value_counts()
+        print(f"Found {len(filtered_jobs)} matching jobs:")
+        for source, count in sources.items():
+            print(f"- {source}: {count}")
     
     return filtered_jobs
 
+def update_csv(new_jobs, csv_file='internships.csv'):
+    """Update the CSV file with new jobs, avoiding duplicates."""
+    columns = {
+        'title': 'Title',
+        'company': 'Company',
+        'location': 'Location',
+        'min_amount': 'Min Salary',
+        'max_amount': 'Max Salary',
+        'interval': 'Salary Interval',
+        'job_url': 'Apply URL',
+        'date_posted': 'Posted Date',
+        'is_remote': 'Is Remote',
+        'site': 'Source'  # Added source tracking
+    }
+    
+    new_df = new_jobs[columns.keys()].rename(columns=columns)
+    
+    try:
+        if os.path.exists(csv_file):
+            existing_df = pd.read_csv(csv_file)
+            existing_urls = set(existing_df['Apply URL'])
+            new_df = new_df[~new_df['Apply URL'].isin(existing_urls)]
+            
+            if not new_df.empty:
+                updated_df = pd.concat([existing_df, new_df], ignore_index=True)
+                updated_df.to_csv(csv_file, index=False)
+                print(f"Added {len(new_df)} new jobs")
+        else:
+            new_df.to_csv(csv_file, index=False)
+            print(f"Created file with {len(new_df)} jobs")
+    except Exception as e:
+        print(f"Error updating CSV: {e}")
+
 def main():
-    # Load companies
     companies = load_companies()
     if not companies:
         print("No companies loaded. Exiting.")
         return
     
-    print(f"\nLoaded {len(companies)} companies. First few companies:")
-    print(companies[:5])
-    
-    # Use a fixed file name in the main directory
-    output_file = 'remote_internships.txt'
+    print(f"Processing {len(companies)} companies...")
     total_matches = 0
     
-    print(f"\nSearching for remote internships... Results will be saved to: {output_file}")
-    
-    # Open file in write mode initially to clear previous results
-    with open(output_file, 'w', encoding='utf-8') as f:
-        f.write("=== High-Paying Remote/Hybrid Internships ===\n")
-        f.write(f"Search started at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
-    
-    # Process companies in smaller batches
-    batch_size = 3  # Reduced batch size
+    # Process companies in smaller batches to avoid rate limiting
+    batch_size = 3
     for i in range(0, len(companies), batch_size):
         batch = companies[i:i+batch_size]
-        print(f"\nProcessing companies {i+1}-{min(i+batch_size, len(companies))} of {len(companies)}")
+        print(f"\nBatch {i//batch_size + 1}/{(len(companies) + batch_size - 1)//batch_size}")
         
-        # Open file in append mode for each batch
-        with open(output_file, 'a', encoding='utf-8') as f:
-            for company in batch:
-                print(f"\nSearching: {company}")
-                
-                # Search and filter jobs
-                jobs = search_company_jobs(company)
-                if not jobs.empty:
-                    filtered_jobs = filter_jobs(jobs)
-                    
-                    if not filtered_jobs.empty:
-                        # Write company header
-                        f.write(f"\n=== {company} ===\n")
-                        
-                        # Write each job
-                        for _, job in filtered_jobs.iterrows():
-                            write_job_to_file(job, f)
-                            total_matches += 1
-                            
-                        print(f"Found {len(filtered_jobs)} matching jobs at {company}")
-                
-                # Pause between companies to avoid rate limiting
-                time.sleep(2)
+        for company in batch:
+            jobs = search_company_jobs(company)
+            if not jobs.empty:
+                filtered_jobs = filter_jobs(jobs)
+                if not filtered_jobs.empty:
+                    update_csv(filtered_jobs)
+                    total_matches += len(filtered_jobs)
+            time.sleep(2)  # Increased delay between companies
         
-        # Longer pause between batches
         if i + batch_size < len(companies):
             print("Pausing between batches...")
-            time.sleep(5)
+            time.sleep(5)  # Pause between batches
     
-    # Write summary at the end
-    with open(output_file, 'a', encoding='utf-8') as f:
-        f.write(f"\n=== Search Complete ===\n")
-        f.write(f"Total companies searched: {len(companies)}\n")
-        f.write(f"Total matching jobs found: {total_matches}\n")
-        f.write(f"Search completed at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-    
-    print(f"\nSearch complete! Found {total_matches} total matching jobs")
-    print(f"Results saved to: {output_file}")
+    print(f"\nComplete! Found {total_matches} matching jobs")
+    print("Results saved to: internships.csv")
 
 if __name__ == "__main__":
     main()
