@@ -1,0 +1,11 @@
+2025-03-14 19:07:21,492 - ERROR - Error loading companies: 'Company Name'
+2025-03-14 19:07:21,492 - ERROR - No companies loaded. Exiting.
+2025-03-14 19:09:08,670 - INFO - Loaded 3381 companies from CSV
+2025-03-14 19:09:08,670 - INFO - Processing company 1/3381: ibm
+2025-03-14 19:09:08,671 - INFO - Searching for: "ibm" (intern OR internship)
+2025-03-14 19:09:23,478 - INFO - Processing company 2/3381: hewlett-packard
+2025-03-14 19:09:23,478 - INFO - Searching for: "hewlett-packard" (intern OR internship)
+2025-03-14 19:09:29,418 - INFO - Processing company 3/3381: cognizant technology solutions
+2025-03-14 19:09:29,418 - INFO - Searching for: "cognizant technology solutions" (intern OR internship)
+2025-03-14 19:09:36,170 - INFO - Processing company 4/3381: microsoft
+2025-03-14 19:09:36,180 - INFO - Searching for: "microsoft" (intern OR internship)
